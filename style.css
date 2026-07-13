@@ -472,6 +472,14 @@ label[for="gridToggle"], label[for="qrcodeToggle"] {
     background-color: #1e293b;
 }
 
+.linkedin {
+    background-color: #0077b5;
+    box-shadow: 0 2px 4px rgba(0, 119, 181, 0.2);
+}
+.linkedin:hover {
+    background-color: #0a66c2;
+}
+
 .youtube { 
     background-color: #ef4444; 
     box-shadow: 0 2px 4px rgba(239, 68, 68, 0.2);
