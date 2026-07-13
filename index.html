@@ -29,6 +29,7 @@
         <!-- Preconnect fonts for faster loading -->
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
         <script type="application/ld+json">
         {
@@ -82,23 +83,23 @@
             </div>
 
             <div class="step-box">
-                <h3>1. Upload</h3>
+                <h3><span class="step-badge">1</span> Upload</h3>
                 <label class="small-text">Upload Excel/CSV Data [1st row must be headers - Name, Event, ]</label>
                 <input type="file" id="dataUpload" accept=".csv, .xlsx, .xls">
                 <label class="small-text" style="margin-top:10px;">Certificate Template Image</label>
                 <input type="file" id="templateUpload" accept="image/*">
             </div>
 
-            <div class="step-box">
-                <h3>2. Tools</h3>
+            <div class="step-box" id="tools-box" style="cursor: pointer;">
+                <h3><span class="step-badge">2</span> Tools</h3>
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <input type="checkbox" id="gridToggle" style="width: auto;">
                     <label for="gridToggle">Snap to Grid</label>
                 </div>
             </div>
 
-            <div class="step-box">
-                <h3>3. QR Code Generator</h3>
+            <div class="step-box" id="qrcode-box" style="cursor: pointer;">
+                <h3><span class="step-badge">3</span> QR Code Generator</h3>
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <input type="checkbox" id="qrcodeToggle" style="width: auto; margin-bottom: 0;">
                     <label for="qrcodeToggle">Enable QR Code</label>
@@ -116,13 +117,13 @@
             </div>
 
             <div class="step-box" id="field-controls" style="display:none;">
-                <h3>4. Fields</h3>
+                <h3><span class="step-badge">4</span> Fields</h3>
                 <p class="small-text">Tap to add:</p>
                 <div id="buttons-container"></div>
             </div>
 
             <div class="step-box" id="layers-panel" style="display:none;">
-                <h3>5. Active Layers</h3>
+                <h3><span class="step-badge">5</span> Active Layers</h3>
                 <p class="small-text">Tap to edit:</p>
                 <div id="layers-container" style="display: flex; flex-direction: column; gap: 5px;"></div>
             </div>

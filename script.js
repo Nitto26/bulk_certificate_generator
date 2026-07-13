@@ -16,6 +16,9 @@ function resizeCanvasElement() {
     if(wrapper) {
         canvas.setWidth(wrapper.clientWidth);
         canvas.setHeight(wrapper.clientHeight);
+        if (canvas.backgroundImage) {
+            fitImageToScreen(canvas.backgroundImage.width, canvas.backgroundImage.height);
+        }
     }
 }
 window.addEventListener('resize', resizeCanvasElement);
@@ -120,11 +123,17 @@ canvas.on('object:moving', function(options) {
 
 // 6. ADD TEXT & LAYERS
 function generateQrDataUrl(value) {
-    const qr = new QRious({
-        value: value || ' ',
-        size: 300
-    });
-    return qr.toDataURL();
+    try {
+        const qr = new QRious({
+            value: value || ' ',
+            size: 300
+        });
+        return qr.toDataURL();
+    } catch (err) {
+        console.error("QR Code generation failed for value:", value, err);
+        // Fallback to a 1x1 transparent pixel data URL
+        return "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    }
 }
 
 function addTextToCanvas(headerName) {
@@ -293,6 +302,24 @@ function addSelectedQrcode() {
 document.getElementById('addQrcodeColBtn').addEventListener('click', addSelectedQrcode);
 document.getElementById('addQrcodeBtn').addEventListener('click', addSelectedQrcode);
 
+// Step Card click toggle handlers
+document.getElementById('tools-box').addEventListener('click', function(e) {
+    if (e.target !== document.getElementById('gridToggle') && e.target.tagName !== 'LABEL') {
+        const cb = document.getElementById('gridToggle');
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change'));
+    }
+});
+
+document.getElementById('qrcode-box').addEventListener('click', function(e) {
+    const ignoredTags = ['SELECT', 'BUTTON', 'INPUT', 'LABEL', 'OPTION'];
+    if (!ignoredTags.includes(e.target.tagName)) {
+        const cb = document.getElementById('qrcodeToggle');
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change'));
+    }
+});
+
 // 9. PROPERTIES & LOGIC
 const propPanel = document.getElementById('properties-panel');
 
@@ -388,58 +415,87 @@ document.getElementById('previewBtn').addEventListener('click', function() {
 // 11. GENERATE
 document.getElementById('generateBtn').addEventListener('click', async function() {
     if(excelData.length === 0) { alert("Upload Data First"); return; }
+    
+    const generateBtn = document.getElementById('generateBtn');
+    const previewBtn = document.getElementById('previewBtn');
     const statusDiv = document.getElementById('status-message');
-    statusDiv.innerText = "Generating...";
     
-    canvas.discardActiveObject();
-    const wasGrid = isGridEnabled; isGridEnabled=false; drawGrid(); canvas.renderAll();
+    // Disable buttons to prevent duplicate triggers
+    generateBtn.disabled = true;
+    previewBtn.disabled = true;
+    generateBtn.style.opacity = '0.7';
+    previewBtn.style.opacity = '0.7';
     
-    const originalVpt = canvas.viewportTransform.slice();
-    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
-    canvas.setWidth(canvas.backgroundImage.width);
-    canvas.setHeight(canvas.backgroundImage.height);
+    statusDiv.innerText = "Initializing generation...";
     
-    const zip = new JSZip();
-    const pattern = document.getElementById('fileNamePattern').value.trim() || `{${headers[0]}}_Certificate`;
-    
-    for (let i = 0; i < excelData.length; i++) {
-        const row = excelData[i];
-        canvas.getObjects().forEach(o => { if(o.type==='text' && o.id) o.set('text', String(row[o.id]||'')) });
+    try {
+        canvas.discardActiveObject();
+        const wasGrid = isGridEnabled; isGridEnabled=false; drawGrid(); canvas.renderAll();
         
-        // Update QR code layers for each row
-        const qrPromises = [];
-        canvas.getObjects().forEach(o => {
-            if (o.isQrCode && o.columnHeader) {
-                const val = String(row[o.columnHeader] !== undefined ? row[o.columnHeader] : '');
-                const p = new Promise(resolve => {
-                    const tempImg = new Image();
-                    tempImg.onload = function() {
-                        o.setElement(tempImg);
-                        resolve();
-                    };
-                    tempImg.src = generateQrDataUrl(val);
-                });
-                qrPromises.push(p);
+        const originalVpt = canvas.viewportTransform.slice();
+        canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+        canvas.setWidth(canvas.backgroundImage.width);
+        canvas.setHeight(canvas.backgroundImage.height);
+        
+        const zip = new JSZip();
+        const pattern = document.getElementById('fileNamePattern').value.trim() || `{${headers[0]}}_Certificate`;
+        
+        for (let i = 0; i < excelData.length; i++) {
+            statusDiv.innerText = `Generating (${i + 1}/${excelData.length})...`;
+            const row = excelData[i];
+            
+            // Allow renderer to flush status string to UI
+            await new Promise(r => setTimeout(r, 0));
+            
+            canvas.getObjects().forEach(o => { if(o.type==='text' && o.id) o.set('text', String(row[o.id]||'')) });
+            
+            // Update QR code layers for each row
+            const qrPromises = [];
+            canvas.getObjects().forEach(o => {
+                if (o.isQrCode && o.columnHeader) {
+                    const val = String(row[o.columnHeader] !== undefined ? row[o.columnHeader] : '');
+                    const p = new Promise(resolve => {
+                        const tempImg = new Image();
+                        tempImg.onload = function() {
+                            o.setElement(tempImg);
+                            resolve();
+                        };
+                        tempImg.src = generateQrDataUrl(val);
+                    });
+                    qrPromises.push(p);
+                }
+            });
+            
+            if (qrPromises.length > 0) {
+                await Promise.all(qrPromises);
             }
-        });
-        
-        if (qrPromises.length > 0) {
-            await Promise.all(qrPromises);
+            
+            canvas.renderAll();
+            
+            const blob = await new Promise(r => canvas.getElement().toBlob(r));
+            let fname = pattern;
+            headers.forEach(h => fname = fname.replace(new RegExp(`{${h}}`, 'gi'), row[h]||''));
+            zip.file(`${fname.replace(/[^a-z0-9 \-_]/gi, '_')}.png`, blob);
         }
         
-        canvas.renderAll();
+        resizeCanvasElement();
+        canvas.setViewportTransform(originalVpt);
+        if(wasGrid) { isGridEnabled=true; drawGrid(); }
         
-        const blob = await new Promise(r => canvas.getElement().toBlob(r));
-        let fname = pattern;
-        headers.forEach(h => fname = fname.replace(new RegExp(`{${h}}`, 'gi'), row[h]||''));
-        zip.file(`${fname.replace(/[^a-z0-9 \-_]/gi, '_')}.png`, blob);
+        statusDiv.innerText = "Packaging files...";
+        const zipBlob = await zip.generateAsync({type:"blob"});
+        saveAs(zipBlob, "certificates.zip");
+        statusDiv.innerText = "Done!";
+    } catch (err) {
+        console.error("Batch generation failed:", err);
+        statusDiv.innerText = "Generation failed. Check console.";
+    } finally {
+        // Restore buttons
+        generateBtn.disabled = false;
+        previewBtn.disabled = false;
+        generateBtn.style.opacity = '1';
+        previewBtn.style.opacity = '1';
     }
-    
-    resizeCanvasElement();
-    canvas.setViewportTransform(originalVpt);
-    if(wasGrid) { isGridEnabled=true; drawGrid(); }
-    
-    zip.generateAsync({type:"blob"}).then(c => { saveAs(c, "certificates.zip"); statusDiv.innerText="Done!"; });
 });
 
 // Zoom Helpers
