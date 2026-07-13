@@ -9,6 +9,7 @@ let excelData = [];
 let headers = [];
 let isGridEnabled = false;
 const gridSize = 40;
+let generatedCertificates = []; // Cache for email dispatch
 
 // 2. RESIZE HANDLER
 function resizeCanvasElement() {
@@ -439,6 +440,7 @@ document.getElementById('generateBtn').addEventListener('click', async function(
         
         const zip = new JSZip();
         const pattern = document.getElementById('fileNamePattern').value.trim() || `{${headers[0]}}_Certificate`;
+        generatedCertificates = []; // reset cached images
         
         for (let i = 0; i < excelData.length; i++) {
             statusDiv.innerText = `Generating (${i + 1}/${excelData.length})...`;
@@ -475,7 +477,15 @@ document.getElementById('generateBtn').addEventListener('click', async function(
             const blob = await new Promise(r => canvas.getElement().toBlob(r));
             let fname = pattern;
             headers.forEach(h => fname = fname.replace(new RegExp(`{${h}}`, 'gi'), row[h]||''));
-            zip.file(`${fname.replace(/[^a-z0-9 \-_]/gi, '_')}.png`, blob);
+            const sanitizedFname = fname.replace(/[^a-z0-9 \-_]/gi, '_');
+            zip.file(`${sanitizedFname}.png`, blob);
+            
+            // Save for email attachments
+            generatedCertificates.push({
+                row: row,
+                fileName: sanitizedFname,
+                dataUrl: canvas.toDataURL({format: 'png', quality: 1.0})
+            });
         }
         
         resizeCanvasElement();
@@ -486,6 +496,16 @@ document.getElementById('generateBtn').addEventListener('click', async function(
         const zipBlob = await zip.generateAsync({type:"blob"});
         saveAs(zipBlob, "certificates.zip");
         statusDiv.innerText = "Done!";
+        
+        // Show the Email Box!
+        const emailBox = document.getElementById('email-box');
+        if (emailBox) {
+            emailBox.style.display = 'block';
+            populateEmailDropdown();
+            setTimeout(() => {
+                emailBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }, 200);
+        }
     } catch (err) {
         console.error("Batch generation failed:", err);
         statusDiv.innerText = "Generation failed. Check console.";
@@ -508,3 +528,161 @@ window.zoomCanvas = (factor) => {
 window.resetZoom = () => {
     if(canvas.backgroundImage) fitImageToScreen(canvas.backgroundImage.width, canvas.backgroundImage.height);
 };
+
+// Drag & Drop Setup
+function setupDragAndDrop(dropzoneId, inputId) {
+    const dropzone = document.getElementById(dropzoneId);
+    const input = document.getElementById(inputId);
+    if (!dropzone || !input) return;
+    
+    dropzone.addEventListener('click', () => input.click());
+    
+    dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+    });
+    
+    ['dragleave', 'dragend'].forEach(evt => {
+        dropzone.addEventListener(evt, () => {
+            dropzone.classList.remove('dragover');
+        });
+    });
+    
+    dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+        if (e.dataTransfer.files.length > 0) {
+            input.files = e.dataTransfer.files;
+            input.dispatchEvent(new Event('change'));
+        }
+    });
+}
+
+setupDragAndDrop('dataDropzone', 'dataUpload');
+setupDragAndDrop('templateDropzone', 'templateUpload');
+
+// Email Column Selector
+function populateEmailDropdown() {
+    const select = document.getElementById('emailColumnSelect');
+    if (!select) return;
+    select.innerHTML = '';
+    headers.forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h;
+        opt.textContent = h;
+        if (h.toLowerCase() === 'email' || h.toLowerCase() === 'mail') {
+            opt.selected = true;
+        }
+        select.appendChild(opt);
+    });
+}
+
+// Toggle SMTP Settings
+document.getElementById('toggleSmtpBtn').addEventListener('click', function(e) {
+    e.preventDefault();
+    const smtpDiv = document.getElementById('smtp-settings');
+    const span = this.querySelector('span');
+    if (smtpDiv.style.display === 'none') {
+        smtpDiv.style.display = 'block';
+        span.innerText = "Hide SMTP Connection Settings";
+    } else {
+        smtpDiv.style.display = 'none';
+        span.innerText = "Show SMTP Connection Settings";
+    }
+});
+
+// Send Bulk Emails via SMTP.js
+document.getElementById('sendEmailsBtn').addEventListener('click', async function() {
+    if (generatedCertificates.length === 0) {
+        alert("Please generate certificates first.");
+        return;
+    }
+    
+    const emailCol = document.getElementById('emailColumnSelect').value;
+    const host = document.getElementById('smtpHost').value.trim();
+    const port = document.getElementById('smtpPort').value.trim();
+    const senderName = document.getElementById('smtpSenderName').value.trim();
+    const senderEmail = document.getElementById('smtpSenderEmail').value.trim();
+    const username = document.getElementById('smtpUsername').value.trim();
+    const password = document.getElementById('smtpPassword').value.trim();
+    const subjectPattern = document.getElementById('emailSubject').value.trim() || "Your Certificate";
+    const bodyPattern = document.getElementById('emailBody').value;
+    
+    if (!senderEmail || !username || !password) {
+        alert("Please fill in Sender Email, SMTP Username, and SMTP Password fields.");
+        return;
+    }
+    
+    const emailStatus = document.getElementById('email-status-message');
+    const sendBtn = document.getElementById('sendEmailsBtn');
+    
+    sendBtn.disabled = true;
+    sendBtn.style.opacity = '0.7';
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (let i = 0; i < generatedCertificates.length; i++) {
+        const cert = generatedCertificates[i];
+        const row = cert.row;
+        const recipient = String(row[emailCol] || '').trim();
+        
+        if (!recipient) {
+            console.warn(`Skipping index ${i}: No email address found in column '${emailCol}'`);
+            failCount++;
+            continue;
+        }
+        
+        emailStatus.innerText = `Sending email (${i + 1}/${generatedCertificates.length}) to ${recipient}...`;
+        
+        // Replace placeholder templates
+        let subject = subjectPattern;
+        let body = bodyPattern;
+        headers.forEach(h => {
+            const regex = new RegExp(`{${h}}`, 'gi');
+            subject = subject.replace(regex, String(row[h] || ''));
+            body = body.replace(regex, String(row[h] || ''));
+        });
+        
+        const fromHeader = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
+        const rawBase64 = cert.dataUrl.split(',')[1];
+        
+        try {
+            await new Promise((resolve, reject) => {
+                Email.send({
+                    Host : host,
+                    Port : parseInt(port) || 587,
+                    Username : username,
+                    Password : password,
+                    To : recipient,
+                    From : fromHeader,
+                    Subject : subject,
+                    Body : body,
+                    Attachments : [
+                        {
+                            name : `${cert.fileName}.png`,
+                            data : rawBase64
+                        }
+                    ]
+                }).then(message => {
+                    if (message === "OK") {
+                        resolve();
+                    } else {
+                        reject(new Error(message));
+                    }
+                }).catch(err => reject(err));
+            });
+            successCount++;
+        } catch (err) {
+            console.error(`Failed to send email to ${recipient}:`, err);
+            failCount++;
+        }
+        
+        // Slight delay between emails to avoid spam filters
+        await new Promise(r => setTimeout(r, 800));
+    }
+    
+    emailStatus.innerText = `Completed! Sent: ${successCount}, Failed: ${failCount}`;
+    sendBtn.disabled = false;
+    sendBtn.style.opacity = '1';
+});

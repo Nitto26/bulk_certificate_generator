@@ -49,6 +49,7 @@
         <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+        <script src="https://smtpjs.com/v3/smtp.js"></script>
 
         <style> .font-loader { opacity: 0; height: 0; width: 0; position: absolute; } </style>
 </head>
@@ -84,10 +85,20 @@
 
             <div class="step-box">
                 <h3><span class="step-badge">1</span> Upload</h3>
-                <label class="small-text">Upload Excel/CSV Data [1st row must be headers - Name, Event, ]</label>
-                <input type="file" id="dataUpload" accept=".csv, .xlsx, .xls">
-                <label class="small-text" style="margin-top:10px;">Certificate Template Image</label>
-                <input type="file" id="templateUpload" accept="image/*">
+                
+                <label class="small-text">Upload Excel/CSV Data [1st row must be headers]</label>
+                <div class="upload-dropzone" id="dataDropzone">
+                    <span class="dropzone-icon">📊</span>
+                    <span class="dropzone-text">Drag & drop CSV/Excel here or <strong>browse</strong></span>
+                    <input type="file" id="dataUpload" accept=".csv, .xlsx, .xls" style="display: none;">
+                </div>
+                
+                <label class="small-text" style="margin-top:14px;">Certificate Template Image</label>
+                <div class="upload-dropzone" id="templateDropzone">
+                    <span class="dropzone-icon">🖼️</span>
+                    <span class="dropzone-text">Drag & drop Image here or <strong>browse</strong></span>
+                    <input type="file" id="templateUpload" accept="image/*" style="display: none;">
+                </div>
             </div>
 
             <div class="step-box" id="tools-box" style="cursor: pointer;">
@@ -172,6 +183,53 @@
                 <div id="status-message" role="status" aria-live="polite" style="margin-top:10px; color:#007bff; font-size:0.9rem;"></div>
             </div>
             
+            <div class="step-box" id="email-box" style="display: none; border-left: 4px solid var(--success); background: #fcfdfc;">
+                <h3 style="color: var(--success);"><span class="step-badge" style="background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.2); color: var(--success);">6</span> Send via Email</h3>
+                
+                <label class="small-text">Select Email Column</label>
+                <select id="emailColumnSelect" style="margin-bottom: 12px;"></select>
+                
+                <div style="margin-bottom: 12px;">
+                    <a href="#" id="toggleSmtpBtn" style="font-size: 0.8rem; color: var(--primary); text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                        ⚙️ <span>Show SMTP Connection Settings</span>
+                    </a>
+                </div>
+                
+                <div id="smtp-settings" style="display: none; border-top: 1px solid var(--border-color); padding-top: 12px; margin-bottom: 12px;">
+                    <label class="small-text">SMTP Host</label>
+                    <input type="text" id="smtpHost" placeholder="smtp.gmail.com" value="smtp.gmail.com">
+                    <label class="small-text">SMTP Port</label>
+                    <input type="text" id="smtpPort" placeholder="587" value="587">
+                    <label class="small-text">Sender Name</label>
+                    <input type="text" id="smtpSenderName" placeholder="My Organization">
+                    <label class="small-text">Sender Email (From)</label>
+                    <input type="text" id="smtpSenderEmail" placeholder="myemail@gmail.com">
+                    <label class="small-text">SMTP Username</label>
+                    <input type="text" id="smtpUsername" placeholder="myemail@gmail.com">
+                    <label class="small-text">SMTP Password / App Password</label>
+                    <input type="password" id="smtpPassword" placeholder="••••••••••••••••">
+                    
+                    <div class="smtp-help-box">
+                        <strong>📧 How to connect Gmail/SMTP:</strong>
+                        <ol style="margin: 4px 0 0 16px; padding: 0;">
+                            <li>Enable <strong>2-Step Verification</strong> on your Google Account settings.</li>
+                            <li>Search for <strong>"App Passwords"</strong> in Google search.</li>
+                            <li>Select "Mail" and generate a 16-character passcode.</li>
+                            <li>Paste the passcode in the <strong>SMTP Password</strong> field above.</li>
+                        </ol>
+                    </div>
+                </div>
+                
+                <label class="small-text">Subject</label>
+                <input type="text" id="emailSubject" placeholder="Your Certificate for {Event}">
+                
+                <label class="small-text">Email Message Body</label>
+                <textarea id="emailBody" rows="4" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.8rem; padding: 8px; font-family: inherit; resize: vertical; box-sizing: border-box; margin-bottom: 10px;" placeholder="Hello {Name},&#10;&#10;Please find attached your certificate.&#10;&#10;Best regards,&#10;Organizer"></textarea>
+                
+                <button id="sendEmailsBtn" class="primary-btn" style="background-color: var(--primary); box-shadow: 0 4px 10px -2px rgba(99, 102, 241, 0.3);">📧 Send Emails to All</button>
+                <div id="email-status-message" style="margin-top: 10px; color: var(--primary); font-size: 0.85rem; font-weight: 600;"></div>
+            </div>
+
             <div class="about-section">
                 <div class="divider"></div>
                 <div class="author-link" style="cursor: default; text-decoration: none;">
