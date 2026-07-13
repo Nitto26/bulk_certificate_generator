@@ -47,6 +47,7 @@
         <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
 
         <style> .font-loader { opacity: 0; height: 0; width: 0; position: absolute; } </style>
 </head>
@@ -91,40 +92,75 @@
             <div class="step-box">
                 <h3>2. Tools</h3>
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <input type="checkbox" id="gridToggle" checked style="width: auto;">
+                    <input type="checkbox" id="gridToggle" style="width: auto;">
                     <label for="gridToggle">Snap to Grid</label>
                 </div>
             </div>
 
+            <div class="step-box">
+                <h3>3. QR Code Generator</h3>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="qrcodeToggle" style="width: auto; margin-bottom: 0;">
+                    <label for="qrcodeToggle">Enable QR Code</label>
+                </div>
+                <div id="qrcode-fields" style="display: none; margin-top: 12px;">
+                    <label class="small-text">Select QR Source Column</label>
+                    <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+                        <select id="qrcodeColumnSelect" style="flex: 1; margin-bottom: 0;"></select>
+                        <button id="addQrcodeColBtn" class="field-btn" style="margin: 0; padding: 8px 12px; height: 38px;">Add</button>
+                    </div>
+                    <button id="addQrcodeBtn" class="primary-btn" style="margin-top: 5px; background-color: #007bff; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                        Add QR Code
+                    </button>
+                </div>
+            </div>
+
             <div class="step-box" id="field-controls" style="display:none;">
-                <h3>3. Fields</h3>
+                <h3>4. Fields</h3>
                 <p class="small-text">Tap to add:</p>
                 <div id="buttons-container"></div>
             </div>
 
             <div class="step-box" id="layers-panel" style="display:none;">
-                <h3>4. Active Layers</h3>
+                <h3>5. Active Layers</h3>
                 <p class="small-text">Tap to edit:</p>
                 <div id="layers-container" style="display: flex; flex-direction: column; gap: 5px;"></div>
             </div>
 
             <div class="step-box" id="properties-panel" style="display:none; border-left: 4px solid #007bff; background: #f8f9fa;">
-                <h3 style="color: #007bff;">Edit Field</h3>
-                <label class="small-text">Font</label>
-                <select id="fontFamilyBtn">
-                    <option value="Arial">Arial</option>
-                    <option value="Times New Roman">Times New Roman</option>
-                    <option value="Roboto">Roboto</option>
-                    <option value="Oswald">Oswald</option>
-                    <option value="Playfair Display">Playfair Display</option>
-                    <option value="Great Vibes">Great Vibes</option>
-                    <option value="Courier Prime">Courier</option>
-                </select>
-                <div style="display: flex; gap: 10px; margin-top: 5px;">
-                    <div style="flex: 1;"><label class="small-text">Size</label><input type="number" id="fontSizeBtn"></div>
-                    <div style="flex: 1;"><label class="small-text">Color</label><input type="color" id="fontColorBtn" style="height:35px; border:none;"></div>
+                <h3 id="propertiesTitle" style="color: #007bff; margin-top: 0;">Edit Field</h3>
+                
+                <div id="textProperties">
+                    <label class="small-text">Font</label>
+                    <select id="fontFamilyBtn">
+                        <option value="Arial">Arial</option>
+                        <option value="Times New Roman">Times New Roman</option>
+                        <option value="Roboto">Roboto</option>
+                        <option value="Oswald">Oswald</option>
+                        <option value="Playfair Display">Playfair Display</option>
+                        <option value="Great Vibes">Great Vibes</option>
+                        <option value="Courier Prime">Courier</option>
+                    </select>
+                    <div style="display: flex; gap: 10px; margin-top: 5px;">
+                        <div style="flex: 1;"><label class="small-text">Size</label><input type="number" id="fontSizeBtn"></div>
+                        <div style="flex: 1;"><label class="small-text">Color</label><input type="color" id="fontColorBtn" style="height:35px; border:none;"></div>
+                    </div>
+                    <div style="margin-top: 5px;">
+                        <label class="small-text">Alignment (Spawn Origin)</label>
+                        <select id="alignmentBtn">
+                            <option value="left">Left (Spawn from Left)</option>
+                            <option value="center" selected>Center (Spawn from Center)</option>
+                            <option value="right">Right (Spawn from Right)</option>
+                        </select>
+                    </div>
                 </div>
-                <button id="deleteBtn" class="danger-btn">🗑 Delete Field</button>
+
+                <div id="qrcodeProperties" style="display:none; margin-bottom: 10px;">
+                    <label class="small-text">QR Code Column Source</label>
+                    <input type="text" id="qrcodeSourceDisplay" readonly style="background: #e9ecef; cursor: not-allowed;">
+                </div>
+
+                <button id="deleteBtn" class="danger-btn" style="margin-top: 10px;">🗑 Delete Field</button>
             </div>
 
             <div class="step-box footer">
