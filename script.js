@@ -7,8 +7,9 @@ const canvas = new fabric.Canvas('c', {
 
 let excelData = [];
 let headers = [];
-let isGridEnabled = true;
+let isGridEnabled = false;
 const gridSize = 40;
+let generatedCertificates = []; // Cache for email dispatch
 
 // 2. RESIZE HANDLER
 function resizeCanvasElement() {
@@ -16,6 +17,9 @@ function resizeCanvasElement() {
     if(wrapper) {
         canvas.setWidth(wrapper.clientWidth);
         canvas.setHeight(wrapper.clientHeight);
+        if (canvas.backgroundImage) {
+            fitImageToScreen(canvas.backgroundImage.width, canvas.backgroundImage.height);
+        }
     }
 }
 window.addEventListener('resize', resizeCanvasElement);
@@ -119,6 +123,20 @@ canvas.on('object:moving', function(options) {
 });
 
 // 6. ADD TEXT & LAYERS
+function generateQrDataUrl(value) {
+    try {
+        const qr = new QRious({
+            value: value || ' ',
+            size: 300
+        });
+        return qr.toDataURL();
+    } catch (err) {
+        console.error("QR Code generation failed for value:", value, err);
+        // Fallback to a 1x1 transparent pixel data URL
+        return "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    }
+}
+
 function addTextToCanvas(headerName) {
     if (!canvas.backgroundImage) { alert("Upload template first"); return; }
     
@@ -139,19 +157,45 @@ function addTextToCanvas(headerName) {
     updateLayerList();
 }
 
+function addQrcodeToCanvas(headerName) {
+    if (!canvas.backgroundImage) { alert("Upload template first"); return; }
+    
+    const vpt = canvas.viewportTransform;
+    const centerX = (-vpt[4] + canvas.getWidth() / 2) / vpt[0];
+    const centerY = (-vpt[5] + canvas.getHeight() / 2) / vpt[3];
+
+    const qrImg = new Image();
+    qrImg.onload = function() {
+        const fabricImg = new fabric.Image(qrImg, {
+            left: centerX, top: centerY,
+            originX: 'center', originY: 'center',
+            id: 'qr-' + headerName,
+            isQrCode: true,
+            columnHeader: headerName
+        });
+        
+        fabricImg.scaleToWidth(150 / canvas.getZoom());
+        canvas.add(fabricImg);
+        canvas.setActiveObject(fabricImg);
+        canvas.renderAll();
+        updateLayerList();
+    };
+    qrImg.src = generateQrDataUrl(`{QR:${headerName}}`);
+}
+
 function updateLayerList() {
     const container = document.getElementById('layers-container');
     const panel = document.getElementById('layers-panel');
     container.innerHTML = '';
     
-    const objects = canvas.getObjects().filter(o => o.type === 'text' && o.id);
+    const objects = canvas.getObjects().filter(o => (o.type === 'text' && o.id) || o.isQrCode);
     panel.style.display = objects.length > 0 ? 'block' : 'none';
 
     const activeObj = canvas.getActiveObject();
 
     objects.forEach(obj => {
         const btn = document.createElement('button');
-        btn.innerText = obj.text;
+        btn.innerText = obj.isQrCode ? `QR Code: {${obj.columnHeader}}` : obj.text;
         btn.style.padding = '8px'; btn.style.textAlign = 'left';
         btn.style.border = '1px solid #ccc'; btn.style.background = 'white';
         btn.style.borderRadius = '4px'; btn.style.cursor = 'pointer';
@@ -205,6 +249,7 @@ document.getElementById('dataUpload').addEventListener('change', function(e) {
         if(excelData.length > 0) {
             headers = Object.keys(excelData[0]);
             generateFieldButtons(headers);
+            populateQrDropdown();
             document.getElementById('field-controls').style.display = 'block';
         }
     };
@@ -223,18 +268,105 @@ function generateFieldButtons(list) {
     });
 }
 
+// QR Code Generator UI events and helpers
+function populateQrDropdown() {
+    const select = document.getElementById('qrcodeColumnSelect');
+    if (!select) return;
+    select.innerHTML = '';
+    headers.forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h;
+        opt.textContent = h;
+        select.appendChild(opt);
+    });
+}
+
+document.getElementById('qrcodeToggle').addEventListener('change', function() {
+    const fieldsDiv = document.getElementById('qrcode-fields');
+    if (this.checked) {
+        fieldsDiv.style.display = 'block';
+        populateQrDropdown();
+    } else {
+        fieldsDiv.style.display = 'none';
+    }
+});
+
+function addSelectedQrcode() {
+    const select = document.getElementById('qrcodeColumnSelect');
+    if (select && select.value) {
+        addQrcodeToCanvas(select.value);
+    } else {
+        alert("Please upload Data file first and select a column.");
+    }
+}
+
+document.getElementById('addQrcodeColBtn').addEventListener('click', addSelectedQrcode);
+document.getElementById('addQrcodeBtn').addEventListener('click', addSelectedQrcode);
+
+// Step Card click toggle handlers
+document.getElementById('tools-box').addEventListener('click', function(e) {
+    if (e.target !== document.getElementById('gridToggle') && e.target.tagName !== 'LABEL') {
+        const cb = document.getElementById('gridToggle');
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change'));
+    }
+});
+
+document.getElementById('qrcode-box').addEventListener('click', function(e) {
+    const ignoredTags = ['SELECT', 'BUTTON', 'INPUT', 'LABEL', 'OPTION'];
+    if (!ignoredTags.includes(e.target.tagName)) {
+        const cb = document.getElementById('qrcodeToggle');
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change'));
+    }
+});
+
 // 9. PROPERTIES & LOGIC
 const propPanel = document.getElementById('properties-panel');
+
+function changeAlignment(activeObj, alignment) {
+    if (!activeObj) return;
+    const centerPoint = activeObj.getCenterPoint();
+    activeObj.set({
+        originX: alignment,
+        textAlign: alignment
+    });
+    activeObj.setPositionByOrigin(centerPoint, alignment, activeObj.originY || 'center');
+    canvas.requestRenderAll();
+}
+
 function updatePanel() {
     const active = canvas.getActiveObject();
-    if (active && active.type === 'text') {
-        propPanel.style.display = 'block';
-        document.getElementById('fontFamilyBtn').value = active.fontFamily;
-        document.getElementById('fontSizeBtn').value = active.fontSize;
-        document.getElementById('fontColorBtn').value = active.fill;
+    if (!active) {
+        propPanel.style.display = 'none';
+        return;
+    }
+    
+    propPanel.style.display = 'block';
+    
+    if (active.type === 'text') {
+        document.getElementById('propertiesTitle').innerText = "Edit Text Field";
+        document.getElementById('textProperties').style.display = 'block';
+        document.getElementById('qrcodeProperties').style.display = 'none';
+        
+        document.getElementById('fontFamilyBtn').value = active.fontFamily || 'Arial';
+        document.getElementById('fontSizeBtn').value = active.fontSize || 40;
+        document.getElementById('fontColorBtn').value = active.fill || '#000000';
+        document.getElementById('alignmentBtn').value = active.originX || 'center';
+    } else if (active.isQrCode) {
+        document.getElementById('propertiesTitle').innerText = "Edit QR Code";
+        document.getElementById('textProperties').style.display = 'none';
+        document.getElementById('qrcodeProperties').style.display = 'block';
+        document.getElementById('qrcodeSourceDisplay').value = active.columnHeader || '';
     } else {
         propPanel.style.display = 'none';
+        return;
     }
+
+    // Automatically scroll the sidebar to show the properties panel
+    setTimeout(() => {
+        propPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 100);
 }
 canvas.on('selection:created', () => { updatePanel(); updateLayerList(); });
 canvas.on('selection:updated', () => { updatePanel(); updateLayerList(); });
@@ -243,6 +375,7 @@ canvas.on('selection:cleared', () => { updatePanel(); updateLayerList(); });
 document.getElementById('fontFamilyBtn').addEventListener('change', function() { if(canvas.getActiveObject()) { canvas.getActiveObject().set('fontFamily', this.value); canvas.requestRenderAll(); }});
 document.getElementById('fontSizeBtn').addEventListener('input', function() { if(canvas.getActiveObject()) { canvas.getActiveObject().set('fontSize', parseInt(this.value)); canvas.requestRenderAll(); }});
 document.getElementById('fontColorBtn').addEventListener('input', function() { if(canvas.getActiveObject()) { canvas.getActiveObject().set('fill', this.value); canvas.requestRenderAll(); }});
+document.getElementById('alignmentBtn').addEventListener('change', function() { if(canvas.getActiveObject() && canvas.getActiveObject().type === 'text') { changeAlignment(canvas.getActiveObject(), this.value); }});
 document.getElementById('deleteBtn').addEventListener('click', () => { 
     canvas.remove(canvas.getActiveObject()); canvas.discardActiveObject(); canvas.renderAll(); updateLayerList();
 });
@@ -251,15 +384,30 @@ document.getElementById('deleteBtn').addEventListener('click', () => {
 document.getElementById('previewBtn').addEventListener('click', function() {
     if(excelData.length > 0) {
         const row = excelData[0];
+        const updatePromises = [];
+        
         canvas.getObjects().forEach(obj => {
             if (obj.type === 'text' && obj.id) {
-                // Ensure we handle empty data gracefully
                 const newData = row[obj.id] !== undefined ? String(row[obj.id]) : '';
                 obj.set({ text: newData });
+            } else if (obj.isQrCode && obj.columnHeader) {
+                const value = row[obj.columnHeader] !== undefined ? String(row[obj.columnHeader]) : '';
+                const promise = new Promise((resolve) => {
+                    const tempImg = new Image();
+                    tempImg.onload = function() {
+                        obj.setElement(tempImg);
+                        resolve();
+                    };
+                    tempImg.src = generateQrDataUrl(value);
+                });
+                updatePromises.push(promise);
             }
         });
-        canvas.renderAll();
-        updateLayerList(); // Update list names (e.g. {Name} -> John)
+        
+        Promise.all(updatePromises).then(() => {
+            canvas.renderAll();
+            updateLayerList();
+        });
     } else {
         alert("Please upload Data file first.");
     }
@@ -268,36 +416,106 @@ document.getElementById('previewBtn').addEventListener('click', function() {
 // 11. GENERATE
 document.getElementById('generateBtn').addEventListener('click', async function() {
     if(excelData.length === 0) { alert("Upload Data First"); return; }
+    
+    const generateBtn = document.getElementById('generateBtn');
+    const previewBtn = document.getElementById('previewBtn');
     const statusDiv = document.getElementById('status-message');
-    statusDiv.innerText = "Generating...";
     
-    canvas.discardActiveObject();
-    const wasGrid = isGridEnabled; isGridEnabled=false; drawGrid(); canvas.renderAll();
+    // Disable buttons to prevent duplicate triggers
+    generateBtn.disabled = true;
+    previewBtn.disabled = true;
+    generateBtn.style.opacity = '0.7';
+    previewBtn.style.opacity = '0.7';
     
-    const originalVpt = canvas.viewportTransform.slice();
-    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
-    canvas.setWidth(canvas.backgroundImage.width);
-    canvas.setHeight(canvas.backgroundImage.height);
+    statusDiv.innerText = "Initializing generation...";
     
-    const zip = new JSZip();
-    const pattern = document.getElementById('fileNamePattern').value.trim() || `{${headers[0]}}_Certificate`;
-    
-    for (let i = 0; i < excelData.length; i++) {
-        const row = excelData[i];
-        canvas.getObjects().forEach(o => { if(o.type==='text' && o.id) o.set('text', String(row[o.id]||'')) });
-        canvas.renderAll();
+    try {
+        canvas.discardActiveObject();
+        const wasGrid = isGridEnabled; isGridEnabled=false; drawGrid(); canvas.renderAll();
         
-        const blob = await new Promise(r => canvas.getElement().toBlob(r));
-        let fname = pattern;
-        headers.forEach(h => fname = fname.replace(new RegExp(`{${h}}`, 'gi'), row[h]||''));
-        zip.file(`${fname.replace(/[^a-z0-9 \-_]/gi, '_')}.png`, blob);
+        const originalVpt = canvas.viewportTransform.slice();
+        canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+        canvas.setWidth(canvas.backgroundImage.width);
+        canvas.setHeight(canvas.backgroundImage.height);
+        
+        const zip = new JSZip();
+        const pattern = document.getElementById('fileNamePattern').value.trim() || `{${headers[0]}}_Certificate`;
+        generatedCertificates = []; // reset cached images
+        
+        for (let i = 0; i < excelData.length; i++) {
+            statusDiv.innerText = `Generating (${i + 1}/${excelData.length})...`;
+            const row = excelData[i];
+            
+            // Allow renderer to flush status string to UI
+            await new Promise(r => setTimeout(r, 0));
+            
+            canvas.getObjects().forEach(o => { if(o.type==='text' && o.id) o.set('text', String(row[o.id]||'')) });
+            
+            // Update QR code layers for each row
+            const qrPromises = [];
+            canvas.getObjects().forEach(o => {
+                if (o.isQrCode && o.columnHeader) {
+                    const val = String(row[o.columnHeader] !== undefined ? row[o.columnHeader] : '');
+                    const p = new Promise(resolve => {
+                        const tempImg = new Image();
+                        tempImg.onload = function() {
+                            o.setElement(tempImg);
+                            resolve();
+                        };
+                        tempImg.src = generateQrDataUrl(val);
+                    });
+                    qrPromises.push(p);
+                }
+            });
+            
+            if (qrPromises.length > 0) {
+                await Promise.all(qrPromises);
+            }
+            
+            canvas.renderAll();
+            
+            const blob = await new Promise(r => canvas.getElement().toBlob(r));
+            let fname = pattern;
+            headers.forEach(h => fname = fname.replace(new RegExp(`{${h}}`, 'gi'), row[h]||''));
+            const sanitizedFname = fname.replace(/[^a-z0-9 \-_]/gi, '_');
+            zip.file(`${sanitizedFname}.png`, blob);
+            
+            // Save for email attachments
+            generatedCertificates.push({
+                row: row,
+                fileName: sanitizedFname,
+                dataUrl: canvas.toDataURL({format: 'png', quality: 1.0})
+            });
+        }
+        
+        resizeCanvasElement();
+        canvas.setViewportTransform(originalVpt);
+        if(wasGrid) { isGridEnabled=true; drawGrid(); }
+        
+        statusDiv.innerText = "Packaging files...";
+        const zipBlob = await zip.generateAsync({type:"blob"});
+        saveAs(zipBlob, "certificates.zip");
+        statusDiv.innerText = "Done!";
+        
+        // Show the Email Box!
+        const emailBox = document.getElementById('email-box');
+        if (emailBox) {
+            emailBox.style.display = 'block';
+            populateEmailDropdown();
+            setTimeout(() => {
+                emailBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }, 200);
+        }
+    } catch (err) {
+        console.error("Batch generation failed:", err);
+        statusDiv.innerText = "Generation failed. Check console.";
+    } finally {
+        // Restore buttons
+        generateBtn.disabled = false;
+        previewBtn.disabled = false;
+        generateBtn.style.opacity = '1';
+        previewBtn.style.opacity = '1';
     }
-    
-    resizeCanvasElement();
-    canvas.setViewportTransform(originalVpt);
-    if(wasGrid) { isGridEnabled=true; drawGrid(); }
-    
-    zip.generateAsync({type:"blob"}).then(c => { saveAs(c, "certificates.zip"); statusDiv.innerText="Done!"; });
 });
 
 // Zoom Helpers
@@ -310,3 +528,245 @@ window.zoomCanvas = (factor) => {
 window.resetZoom = () => {
     if(canvas.backgroundImage) fitImageToScreen(canvas.backgroundImage.width, canvas.backgroundImage.height);
 };
+
+// Drag & Drop Setup
+function setupDragAndDrop(dropzoneId, inputId) {
+    const dropzone = document.getElementById(dropzoneId);
+    const input = document.getElementById(inputId);
+    if (!dropzone || !input) return;
+    
+    dropzone.addEventListener('click', () => input.click());
+    
+    dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+    });
+    
+    ['dragleave', 'dragend'].forEach(evt => {
+        dropzone.addEventListener(evt, () => {
+            dropzone.classList.remove('dragover');
+        });
+    });
+    
+    dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+        if (e.dataTransfer.files.length > 0) {
+            input.files = e.dataTransfer.files;
+            input.dispatchEvent(new Event('change'));
+        }
+    });
+}
+
+setupDragAndDrop('dataDropzone', 'dataUpload');
+setupDragAndDrop('templateDropzone', 'templateUpload');
+
+// Email Column Selector
+function populateEmailDropdown() {
+    const select = document.getElementById('emailColumnSelect');
+    if (!select) return;
+    select.innerHTML = '';
+    headers.forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h;
+        opt.textContent = h;
+        if (h.toLowerCase() === 'email' || h.toLowerCase() === 'mail') {
+            opt.selected = true;
+        }
+        select.appendChild(opt);
+    });
+}
+
+// Google OAuth & Gmail API variables
+let tokenClient;
+let accessToken = null;
+let userEmail = '';
+
+// Initialize Google OAuth Token Client
+window.initGoogleAuth = () => {
+    try {
+        tokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: '630454500322-rgghburlcd1ojqma9ko365eeslnlpv43.apps.googleusercontent.com',
+            scope: 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email',
+            callback: async (response) => {
+                if (response.error !== undefined) {
+                    console.error("Google Auth Error:", response.error);
+                    alert("Authentication failed: " + response.error);
+                    return;
+                }
+                accessToken = response.access_token;
+                
+                // Fetch connected email address
+                try {
+                    const infoResp = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                        headers: { 'Authorization': `Bearer ${accessToken}` }
+                    });
+                    const userInfo = await infoResp.json();
+                    userEmail = userInfo.email;
+                    
+                    document.getElementById('google-connected-email').innerText = `Connected as: ${userEmail}`;
+                    document.getElementById('google-auth-btn').style.display = 'none';
+                    document.getElementById('google-connected-area').style.display = 'block';
+                } catch (err) {
+                    console.error("Failed to fetch user email:", err);
+                    alert("Failed to retrieve connected email address. You can still proceed to send.");
+                }
+            },
+        });
+    } catch (err) {
+        console.error("Google Client SDK init failed:", err);
+    }
+};
+
+// Auth trigger buttons
+document.getElementById('google-auth-btn').addEventListener('click', () => {
+    if (tokenClient) {
+        // Request token (triggers browser popup)
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+    } else {
+        alert("Google Authentication SDK is still loading. Please wait a second and try again.");
+    }
+});
+
+document.getElementById('google-logout-btn').addEventListener('click', (e) => {
+    e.preventDefault();
+    if (accessToken) {
+        google.accounts.oauth2.revokeToken(accessToken, () => {
+            accessToken = null;
+            userEmail = '';
+            document.getElementById('google-connected-area').style.display = 'none';
+            document.getElementById('google-auth-btn').style.display = 'block';
+        });
+    }
+});
+
+// Helper: Build RFC 822 MIME message with a PNG attachment
+function buildMimeMessage(senderEmail, senderName, to, subject, body, base64Png, fileName) {
+    const boundary = "boundary_" + Math.random().toString(36).substring(2);
+    const fromHeader = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
+    
+    const parts = [
+        `From: ${fromHeader}`,
+        `To: ${to}`,
+        `Subject: =?utf-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`,
+        `MIME-Version: 1.0`,
+        `Content-Type: multipart/mixed; boundary="${boundary}"`,
+        ``,
+        `--${boundary}`,
+        `Content-Type: text/plain; charset="UTF-8"`,
+        `Content-Transfer-Encoding: 7bit`,
+        ``,
+        body,
+        ``,
+        `--${boundary}`,
+        `Content-Type: image/png; name="${fileName}"`,
+        `Content-Transfer-Encoding: base64`,
+        `Content-Disposition: attachment; filename="${fileName}"`,
+        ``,
+        base64Png,
+        ``,
+        `--${boundary}--`
+    ];
+    
+    return parts.join("\r\n");
+}
+
+// Helper: Convert string to base64url format (replace + with -, / with _, remove trailing =)
+function base64urlEncode(str) {
+    const base64 = btoa(unescape(encodeURIComponent(str)));
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// Send Bulk Emails via Gmail REST API
+document.getElementById('sendEmailsBtn').addEventListener('click', async function() {
+    if (!accessToken) {
+        alert("Please connect your Google Account first.");
+        return;
+    }
+    if (generatedCertificates.length === 0) {
+        alert("Please generate certificates first.");
+        return;
+    }
+    
+    const emailCol = document.getElementById('emailColumnSelect').value;
+    const senderName = document.getElementById('emailSenderName').value.trim();
+    const subjectPattern = document.getElementById('emailSubject').value.trim() || "Your Certificate";
+    const bodyPattern = document.getElementById('emailBody').value;
+    
+    const emailStatus = document.getElementById('email-status-message');
+    const sendBtn = document.getElementById('sendEmailsBtn');
+    
+    sendBtn.disabled = true;
+    sendBtn.style.opacity = '0.7';
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (let i = 0; i < generatedCertificates.length; i++) {
+        const cert = generatedCertificates[i];
+        const row = cert.row;
+        const recipient = String(row[emailCol] || '').trim();
+        
+        if (!recipient) {
+            console.warn(`Skipping index ${i}: No email address found in column '${emailCol}'`);
+            failCount++;
+            continue;
+        }
+        
+        emailStatus.innerText = `Sending email (${i + 1}/${generatedCertificates.length}) to ${recipient}...`;
+        
+        // Customize subject/body using row placeholders
+        let subject = subjectPattern;
+        let body = bodyPattern;
+        headers.forEach(h => {
+            const regex = new RegExp(`{${h}}`, 'gi');
+            subject = subject.replace(regex, String(row[h] || ''));
+            body = body.replace(regex, String(row[h] || ''));
+        });
+        
+        const rawBase64 = cert.dataUrl.split(',')[1];
+        const mimeMsg = buildMimeMessage(userEmail, senderName, recipient, subject, body, rawBase64, `${cert.fileName}.png`);
+        const base64UrlMsg = base64urlEncode(mimeMsg);
+        
+        try {
+            const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    raw: base64UrlMsg
+                })
+            });
+            
+            if (response.ok) {
+                successCount++;
+            } else {
+                const errData = await response.json();
+                throw new Error(errData.error?.message || "Unknown Gmail API error");
+            }
+        } catch (err) {
+            console.error(`Failed to send email to ${recipient}:`, err);
+            failCount++;
+        }
+        
+        // Wait 800ms between sends to avoid spam thresholds
+        await new Promise(r => setTimeout(r, 800));
+    }
+    
+    emailStatus.innerText = `Completed! Sent: ${successCount}, Failed: ${failCount}`;
+    sendBtn.disabled = false;
+    sendBtn.style.opacity = '1';
+});
+
+// Poll to check when Google SDK is loaded, then initialize
+function checkGoogleSdk() {
+    if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
+        initGoogleAuth();
+    } else {
+        setTimeout(checkGoogleSdk, 100);
+    }
+}
+checkGoogleSdk();
+
