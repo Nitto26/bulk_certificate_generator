@@ -577,41 +577,121 @@ function populateEmailDropdown() {
     });
 }
 
-// Toggle SMTP Settings
-document.getElementById('toggleSmtpBtn').addEventListener('click', function(e) {
-    e.preventDefault();
-    const smtpDiv = document.getElementById('smtp-settings');
-    const span = this.querySelector('span');
-    if (smtpDiv.style.display === 'none') {
-        smtpDiv.style.display = 'block';
-        span.innerText = "Hide SMTP Connection Settings";
+// Google OAuth & Gmail API variables
+let tokenClient;
+let accessToken = null;
+let userEmail = '';
+
+// Initialize Google OAuth Token Client
+window.initGoogleAuth = () => {
+    try {
+        tokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: '630454500322-rgghburlcd1ojqma9ko365eeslnlpv43.apps.googleusercontent.com',
+            scope: 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email',
+            callback: async (response) => {
+                if (response.error !== undefined) {
+                    console.error("Google Auth Error:", response.error);
+                    alert("Authentication failed: " + response.error);
+                    return;
+                }
+                accessToken = response.access_token;
+                
+                // Fetch connected email address
+                try {
+                    const infoResp = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                        headers: { 'Authorization': `Bearer ${accessToken}` }
+                    });
+                    const userInfo = await infoResp.json();
+                    userEmail = userInfo.email;
+                    
+                    document.getElementById('google-connected-email').innerText = `Connected as: ${userEmail}`;
+                    document.getElementById('google-auth-btn').style.display = 'none';
+                    document.getElementById('google-connected-area').style.display = 'block';
+                } catch (err) {
+                    console.error("Failed to fetch user email:", err);
+                    alert("Failed to retrieve connected email address. You can still proceed to send.");
+                }
+            },
+        });
+    } catch (err) {
+        console.error("Google Client SDK init failed:", err);
+    }
+};
+
+// Auth trigger buttons
+document.getElementById('google-auth-btn').addEventListener('click', () => {
+    if (tokenClient) {
+        // Request token (triggers browser popup)
+        tokenClient.requestAccessToken({ prompt: 'consent' });
     } else {
-        smtpDiv.style.display = 'none';
-        span.innerText = "Show SMTP Connection Settings";
+        alert("Google Authentication SDK is still loading. Please wait a second and try again.");
     }
 });
 
-// Send Bulk Emails via SMTP.js
+document.getElementById('google-logout-btn').addEventListener('click', (e) => {
+    e.preventDefault();
+    if (accessToken) {
+        google.accounts.oauth2.revokeToken(accessToken, () => {
+            accessToken = null;
+            userEmail = '';
+            document.getElementById('google-connected-area').style.display = 'none';
+            document.getElementById('google-auth-btn').style.display = 'block';
+        });
+    }
+});
+
+// Helper: Build RFC 822 MIME message with a PNG attachment
+function buildMimeMessage(senderEmail, senderName, to, subject, body, base64Png, fileName) {
+    const boundary = "boundary_" + Math.random().toString(36).substring(2);
+    const fromHeader = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
+    
+    const parts = [
+        `From: ${fromHeader}`,
+        `To: ${to}`,
+        `Subject: =?utf-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`,
+        `MIME-Version: 1.0`,
+        `Content-Type: multipart/mixed; boundary="${boundary}"`,
+        ``,
+        `--${boundary}`,
+        `Content-Type: text/plain; charset="UTF-8"`,
+        `Content-Transfer-Encoding: 7bit`,
+        ``,
+        body,
+        ``,
+        `--${boundary}`,
+        `Content-Type: image/png; name="${fileName}"`,
+        `Content-Transfer-Encoding: base64`,
+        `Content-Disposition: attachment; filename="${fileName}"`,
+        ``,
+        base64Png,
+        ``,
+        `--${boundary}--`
+    ];
+    
+    return parts.join("\r\n");
+}
+
+// Helper: Convert string to base64url format (replace + with -, / with _, remove trailing =)
+function base64urlEncode(str) {
+    const base64 = btoa(unescape(encodeURIComponent(str)));
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// Send Bulk Emails via Gmail REST API
 document.getElementById('sendEmailsBtn').addEventListener('click', async function() {
+    if (!accessToken) {
+        alert("Please connect your Google Account first.");
+        return;
+    }
     if (generatedCertificates.length === 0) {
         alert("Please generate certificates first.");
         return;
     }
     
     const emailCol = document.getElementById('emailColumnSelect').value;
-    const host = document.getElementById('smtpHost').value.trim();
-    const port = document.getElementById('smtpPort').value.trim();
-    const senderName = document.getElementById('smtpSenderName').value.trim();
-    const senderEmail = document.getElementById('smtpSenderEmail').value.trim();
-    const username = document.getElementById('smtpUsername').value.trim();
-    const password = document.getElementById('smtpPassword').value.trim();
+    const senderName = document.getElementById('emailSenderName').value.trim();
     const subjectPattern = document.getElementById('emailSubject').value.trim() || "Your Certificate";
     const bodyPattern = document.getElementById('emailBody').value;
-    
-    if (!senderEmail || !username || !password) {
-        alert("Please fill in Sender Email, SMTP Username, and SMTP Password fields.");
-        return;
-    }
     
     const emailStatus = document.getElementById('email-status-message');
     const sendBtn = document.getElementById('sendEmailsBtn');
@@ -635,7 +715,7 @@ document.getElementById('sendEmailsBtn').addEventListener('click', async functio
         
         emailStatus.innerText = `Sending email (${i + 1}/${generatedCertificates.length}) to ${recipient}...`;
         
-        // Replace placeholder templates
+        // Customize subject/body using row placeholders
         let subject = subjectPattern;
         let body = bodyPattern;
         headers.forEach(h => {
@@ -644,41 +724,34 @@ document.getElementById('sendEmailsBtn').addEventListener('click', async functio
             body = body.replace(regex, String(row[h] || ''));
         });
         
-        const fromHeader = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
         const rawBase64 = cert.dataUrl.split(',')[1];
+        const mimeMsg = buildMimeMessage(userEmail, senderName, recipient, subject, body, rawBase64, `${cert.fileName}.png`);
+        const base64UrlMsg = base64urlEncode(mimeMsg);
         
         try {
-            await new Promise((resolve, reject) => {
-                Email.send({
-                    Host : host,
-                    Port : parseInt(port) || 587,
-                    Username : username,
-                    Password : password,
-                    To : recipient,
-                    From : fromHeader,
-                    Subject : subject,
-                    Body : body,
-                    Attachments : [
-                        {
-                            name : `${cert.fileName}.png`,
-                            data : rawBase64
-                        }
-                    ]
-                }).then(message => {
-                    if (message === "OK") {
-                        resolve();
-                    } else {
-                        reject(new Error(message));
-                    }
-                }).catch(err => reject(err));
+            const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    raw: base64UrlMsg
+                })
             });
-            successCount++;
+            
+            if (response.ok) {
+                successCount++;
+            } else {
+                const errData = await response.json();
+                throw new Error(errData.error?.message || "Unknown Gmail API error");
+            }
         } catch (err) {
             console.error(`Failed to send email to ${recipient}:`, err);
             failCount++;
         }
         
-        // Slight delay between emails to avoid spam filters
+        // Wait 800ms between sends to avoid spam thresholds
         await new Promise(r => setTimeout(r, 800));
     }
     
@@ -686,3 +759,14 @@ document.getElementById('sendEmailsBtn').addEventListener('click', async functio
     sendBtn.disabled = false;
     sendBtn.style.opacity = '1';
 });
+
+// Poll to check when Google SDK is loaded, then initialize
+function checkGoogleSdk() {
+    if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
+        initGoogleAuth();
+    } else {
+        setTimeout(checkGoogleSdk, 100);
+    }
+}
+checkGoogleSdk();
+
