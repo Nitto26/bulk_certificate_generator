@@ -11,6 +11,55 @@ let isGridEnabled = false;
 const gridSize = 40;
 let generatedCertificates = []; // Cache for email dispatch
 
+// IndexedDB Helper Functions
+const dbName = "SmartCertGeneratorDB";
+const storeName = "AppStateStore";
+
+function getDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(dbName, 1);
+        request.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains(storeName)) {
+                db.createObjectStore(storeName);
+            }
+        };
+        request.onsuccess = (e) => resolve(e.target.result);
+        request.onerror = (e) => reject(request.error);
+    });
+}
+
+async function dbSet(key, val) {
+    try {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(storeName, "readwrite");
+            const store = tx.objectStore(storeName);
+            const request = store.put(val, key);
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+    } catch (err) {
+        console.error("IndexedDB error:", err);
+    }
+}
+
+async function dbGet(key) {
+    try {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(storeName, "readonly");
+            const store = tx.objectStore(storeName);
+            const request = store.get(key);
+            request.onsuccess = (e) => resolve(e.target.result);
+            request.onerror = () => reject(request.error);
+        });
+    } catch (err) {
+        console.error("IndexedDB error:", err);
+        return null;
+    }
+}
+
 // 2. RESIZE HANDLER
 function resizeCanvasElement() {
     const wrapper = document.querySelector('.canvas-wrapper');
@@ -25,8 +74,26 @@ function resizeCanvasElement() {
 window.addEventListener('resize', resizeCanvasElement);
 resizeCanvasElement(); 
 
+function updateDropzoneUi(dropzoneId, icon, text) {
+    const dropzone = document.getElementById(dropzoneId);
+    if (!dropzone) return;
+    const iconEl = dropzone.querySelector('.dropzone-icon');
+    const textEl = dropzone.querySelector('.dropzone-text');
+    if (iconEl) iconEl.innerHTML = icon;
+    if (textEl) textEl.innerHTML = text;
+}
+
 // 3. IMAGE UPLOAD
-document.getElementById('templateUpload').addEventListener('change', function(e) {
+document.getElementById('templateUpload').addEventListener('change', async function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    await dbSet('templateImage', file);
+    await dbSet('templateFileName', file.name);
+    loadTemplateFromFile(file);
+    updateDropzoneUi('templateDropzone', '🖼️', `Selected: <strong style="color: var(--primary); word-break: break-all;">${file.name}</strong><br><span style="font-size: 0.7rem; color: var(--success); font-weight: 600;">✓ Background Loaded</span>`);
+});
+
+function loadTemplateFromFile(file) {
     const reader = new FileReader();
     reader.onload = function(event) {
         const imgObj = new Image();
@@ -45,10 +112,11 @@ document.getElementById('templateUpload').addEventListener('change', function(e)
             
             // Clear layers list on new template
             updateLayerList();
+            saveCanvasObjects();
         }
     }
-    reader.readAsDataURL(e.target.files[0]);
-});
+    reader.readAsDataURL(file);
+}
 
 function fitImageToScreen(imgW, imgH) {
     if (!imgW || !imgH) return;
@@ -241,20 +309,44 @@ gridCheckbox.addEventListener('change', syncGridState);
 
 // 8. DATA UPLOAD
 document.getElementById('dataUpload').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
     const reader = new FileReader();
-    reader.onload = function(event) {
+    reader.onload = async function(event) {
         const data = new Uint8Array(event.target.result);
         const workbook = XLSX.read(data, {type: 'array'});
-        excelData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
-        if(excelData.length > 0) {
-            headers = Object.keys(excelData[0]);
-            generateFieldButtons(headers);
-            populateQrDropdown();
-            document.getElementById('field-controls').style.display = 'block';
+        const parsed = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+        if(parsed.length > 0) {
+            await dbSet('excelData', parsed);
+            await dbSet('excelFileName', file.name);
+            handleSpreadsheetData(parsed);
+            updateDropzoneUi('dataDropzone', '📄', `Selected: <strong style="color: var(--primary); word-break: break-all;">${file.name}</strong><br><span style="font-size: 0.7rem; color: var(--success); font-weight: 600;">✓ Data Parsed Successfully</span>`);
         }
     };
-    reader.readAsArrayBuffer(e.target.files[0]);
+    reader.readAsArrayBuffer(file);
 });
+
+async function handleSpreadsheetData(data) {
+    excelData = data;
+    if(excelData.length > 0) {
+        headers = Object.keys(excelData[0]);
+        generateFieldButtons(headers);
+        populateQrDropdown();
+        populateEmailDropdown();
+        
+        // Reapply saved values if they exist
+        if (window.savedQrCol) {
+            const qrSel = document.getElementById('qrcodeColumnSelect');
+            if (qrSel) qrSel.value = window.savedQrCol;
+        }
+        if (window.savedEmailCol) {
+            const emailSel = document.getElementById('emailColumnSelect');
+            if (emailSel) emailSel.value = window.savedEmailCol;
+        }
+        
+        document.getElementById('field-controls').style.display = 'block';
+    }
+}
 
 function generateFieldButtons(list) {
     const container = document.getElementById('buttons-container');
@@ -372,12 +464,12 @@ canvas.on('selection:created', () => { updatePanel(); updateLayerList(); });
 canvas.on('selection:updated', () => { updatePanel(); updateLayerList(); });
 canvas.on('selection:cleared', () => { updatePanel(); updateLayerList(); });
 
-document.getElementById('fontFamilyBtn').addEventListener('change', function() { if(canvas.getActiveObject()) { canvas.getActiveObject().set('fontFamily', this.value); canvas.requestRenderAll(); }});
-document.getElementById('fontSizeBtn').addEventListener('input', function() { if(canvas.getActiveObject()) { canvas.getActiveObject().set('fontSize', parseInt(this.value)); canvas.requestRenderAll(); }});
-document.getElementById('fontColorBtn').addEventListener('input', function() { if(canvas.getActiveObject()) { canvas.getActiveObject().set('fill', this.value); canvas.requestRenderAll(); }});
-document.getElementById('alignmentBtn').addEventListener('change', function() { if(canvas.getActiveObject() && canvas.getActiveObject().type === 'text') { changeAlignment(canvas.getActiveObject(), this.value); }});
+document.getElementById('fontFamilyBtn').addEventListener('change', function() { if(canvas.getActiveObject()) { canvas.getActiveObject().set('fontFamily', this.value); canvas.requestRenderAll(); saveCanvasObjects(); }});
+document.getElementById('fontSizeBtn').addEventListener('input', function() { if(canvas.getActiveObject()) { canvas.getActiveObject().set('fontSize', parseInt(this.value)); canvas.requestRenderAll(); saveCanvasObjects(); }});
+document.getElementById('fontColorBtn').addEventListener('input', function() { if(canvas.getActiveObject()) { canvas.getActiveObject().set('fill', this.value); canvas.requestRenderAll(); saveCanvasObjects(); }});
+document.getElementById('alignmentBtn').addEventListener('change', function() { if(canvas.getActiveObject() && canvas.getActiveObject().type === 'text') { changeAlignment(canvas.getActiveObject(), this.value); saveCanvasObjects(); }});
 document.getElementById('deleteBtn').addEventListener('click', () => { 
-    canvas.remove(canvas.getActiveObject()); canvas.discardActiveObject(); canvas.renderAll(); updateLayerList();
+    canvas.remove(canvas.getActiveObject()); canvas.discardActiveObject(); canvas.renderAll(); updateLayerList(); saveCanvasObjects();
 });
 
 // 10. PREVIEW ROW
@@ -769,4 +861,163 @@ function checkGoogleSdk() {
     }
 }
 checkGoogleSdk();
+
+// Workspace State Persistence Logic
+function saveCanvasObjects() {
+    if (!canvas) return;
+    const objectsJson = canvas.getObjects().map(o => o.toJSON(['id', 'isQrCode', 'columnHeader']));
+    dbSet('canvasObjects', objectsJson);
+}
+
+function saveFormState() {
+    const state = {
+        fileNamePattern: document.getElementById('fileNamePattern').value,
+        emailSubject: document.getElementById('emailSubject').value,
+        emailBody: document.getElementById('emailBody').value,
+        emailSenderName: document.getElementById('emailSenderName').value,
+        gridToggle: document.getElementById('gridToggle').checked,
+        qrcodeToggle: document.getElementById('qrcodeToggle').checked,
+        qrcodeColumnSelect: document.getElementById('qrcodeColumnSelect')?.value || '',
+        emailColumnSelect: document.getElementById('emailColumnSelect')?.value || ''
+    };
+    localStorage.setItem('cert_generator_form_state', JSON.stringify(state));
+}
+
+// Attach listeners to save configurations dynamically
+['fileNamePattern', 'emailSubject', 'emailBody', 'emailSenderName', 'gridToggle', 'qrcodeToggle'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+        el.addEventListener('input', saveFormState);
+        el.addEventListener('change', saveFormState);
+    }
+});
+
+// Trigger form state save on dynamic select changes
+document.addEventListener('change', (e) => {
+    if (e.target && (e.target.id === 'qrcodeColumnSelect' || e.target.id === 'emailColumnSelect')) {
+        saveFormState();
+    }
+});
+
+function loadFormState() {
+    const raw = localStorage.getItem('cert_generator_form_state');
+    if (!raw) return;
+    try {
+        const state = JSON.parse(raw);
+        document.getElementById('fileNamePattern').value = state.fileNamePattern || '';
+        document.getElementById('emailSubject').value = state.emailSubject || '';
+        document.getElementById('emailBody').value = state.emailBody || '';
+        document.getElementById('emailSenderName').value = state.emailSenderName || '';
+        
+        const gridToggle = document.getElementById('gridToggle');
+        gridToggle.checked = !!state.gridToggle;
+        syncGridState();
+        
+        const qrToggle = document.getElementById('qrcodeToggle');
+        qrToggle.checked = !!state.qrcodeToggle;
+        qrToggle.dispatchEvent(new Event('change'));
+        
+        window.savedQrCol = state.qrcodeColumnSelect;
+        window.savedEmailCol = state.emailColumnSelect;
+    } catch (e) {
+        console.error("Failed to load form state:", e);
+    }
+}
+
+async function restoreSavedState() {
+    // 1. Load configuration forms
+    loadFormState();
+    
+    // 2. Load spreadsheet data
+    const savedData = await dbGet('excelData');
+    if (savedData && savedData.length > 0) {
+        await handleSpreadsheetData(savedData);
+        const savedExcelName = await dbGet('excelFileName');
+        if (savedExcelName) {
+            updateDropzoneUi('dataDropzone', '📄', `Selected: <strong style="color: var(--primary); word-break: break-all;">${savedExcelName}</strong><br><span style="font-size: 0.7rem; color: var(--success); font-weight: 600;">✓ Data Parsed Successfully</span>`);
+        }
+    }
+    
+    // 3. Load template background
+    const savedTemplateBlob = await dbGet('templateImage');
+    if (savedTemplateBlob) {
+        const savedTemplateName = await dbGet('templateFileName');
+        if (savedTemplateName) {
+            updateDropzoneUi('templateDropzone', '🖼️', `Selected: <strong style="color: var(--primary); word-break: break-all;">${savedTemplateName}</strong><br><span style="font-size: 0.7rem; color: var(--success); font-weight: 600;">✓ Background Loaded</span>`);
+        }
+        
+        const imgUrl = URL.createObjectURL(savedTemplateBlob);
+        const imgObj = new Image();
+        imgObj.src = imgUrl;
+        imgObj.onload = function() {
+            canvas.clear();
+            canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+            
+            const imgInstance = new fabric.Image(imgObj, {
+                selectable: false, evented: false, originX: 'left', originY: 'top'
+            });
+            
+            canvas.setBackgroundImage(imgInstance, () => {
+                fitImageToScreen(imgInstance.width, imgInstance.height);
+                syncGridState();
+                
+                // 4. Load canvas objects
+                restoreCanvasObjects().then(() => {
+                    bindCanvasAutoSave();
+                });
+            });
+        };
+    } else {
+        bindCanvasAutoSave();
+    }
+}
+
+function restoreCanvasObjects() {
+    return new Promise(async (resolve) => {
+        const savedObjects = await dbGet('canvasObjects');
+        if (savedObjects && savedObjects.length > 0) {
+            canvas.getObjects().forEach(o => canvas.remove(o));
+            
+            fabric.util.enlivenObjects(savedObjects, (enlivenedObjects) => {
+                enlivenedObjects.forEach(obj => {
+                    canvas.add(obj);
+                });
+                canvas.renderAll();
+                updateLayerList();
+                resolve();
+            });
+        } else {
+            resolve();
+        }
+    });
+}
+
+function bindCanvasAutoSave() {
+    canvas.on('object:added', saveCanvasObjects);
+    canvas.on('object:modified', saveCanvasObjects);
+    canvas.on('object:removed', saveCanvasObjects);
+    canvas.on('text:changed', saveCanvasObjects);
+}
+
+// Reset workspace action
+document.getElementById('resetWorkspaceBtn').addEventListener('click', async () => {
+    if (confirm("Are you sure you want to clear all template images, data records, and text positions from the workspace?")) {
+        localStorage.removeItem('cert_generator_form_state');
+        try {
+            const db = await getDB();
+            const tx = db.transaction(storeName, "readwrite");
+            tx.objectStore(storeName).clear();
+            await new Promise((r, rej) => {
+                tx.oncomplete = () => r();
+                tx.onerror = () => rej(tx.error);
+            });
+        } catch(e) {
+            console.error("Failed to clear database:", e);
+        }
+        location.reload();
+    }
+});
+
+// Run state recovery on launch
+restoreSavedState();
 
